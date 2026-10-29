@@ -11,7 +11,7 @@
 //! violation) drops the instance and marks the plugin `Failed` for the session;
 //! the IDE keeps running.
 //!
-//! Sources: `<plugins_dir>/<id>/` (installed) and `<project>/.openidea/plugins/*/`
+//! Sources: `<plugins_dir>/<id>/` (installed) and `<project>/.idea/openidea/plugins/*/`
 //! (dev plugins, loaded by [`PluginHost::sync_project`]).
 
 mod manifest;

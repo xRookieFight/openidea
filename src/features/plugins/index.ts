@@ -68,7 +68,7 @@ export function activate(): () => void {
       },
     ]),
     startPluginBridge(),
-    // Dev plugins (`<project>/.openidea/plugins`) depend on the open project.
+    // Dev plugins (`<project>/.idea/openidea/plugins`) depend on the open project.
     useProject.subscribe((s, prev) => {
       if (s.project?.root !== prev.project?.root) void refreshPlugins();
     }),

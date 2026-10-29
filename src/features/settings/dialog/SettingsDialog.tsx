@@ -173,7 +173,7 @@ function PageHost({
         {scope === "project" && (
           <div className={styles.scopeNote}>
             <Icon name="info" size={14} />
-            <T>Saved to .openidea/settings.toml in this project; overrides the global value.</T>
+            <T>Saved to .idea/openidea/settings.toml in this project; overrides the global value.</T>
           </div>
         )}
         {globalNote && (

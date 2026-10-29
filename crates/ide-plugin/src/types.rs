@@ -21,7 +21,7 @@ pub enum NotificationLevel {
 pub enum PluginSource {
     /// Installed under `<app-data>/plugins/<id>/`.
     Installed,
-    /// Loaded from `<project>/.openidea/plugins/<dir>/` while that project is open.
+    /// Loaded from `<project>/.idea/openidea/plugins/<dir>/` while that project is open.
     Dev,
 }
 

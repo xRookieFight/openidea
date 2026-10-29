@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, Item, Table, TableLike};
 
-/// Layered settings: defaults → `<app-config>/settings.toml` → `<project>/.openidea/settings.toml`.
+/// Layered settings: defaults → `<app-config>/settings.toml` → `<project>/.idea/openidea/settings.toml`.
 /// Writes go through `toml_edit` so user comments survive.
 ///
 /// TOML keys use the camelCase names of the serde [`Settings`] struct, e.g.

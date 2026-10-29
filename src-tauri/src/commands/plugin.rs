@@ -59,7 +59,7 @@ pub fn plugin_subscribe(window: Window, on_event: Channel<PluginEvent>) {
 }
 
 /// Installed plugins plus the dev plugins of this window's project
-/// (`<project>/.openidea/plugins/*`, rescanned on every call).
+/// (`<project>/.idea/openidea/plugins/*`, rescanned on every call).
 #[tauri::command]
 #[specta::specta]
 pub async fn plugin_list(window: Window, state: State<'_, AppState>) -> IdeResult<PluginsSnapshot> {

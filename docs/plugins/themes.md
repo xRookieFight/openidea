@@ -116,7 +116,7 @@ There is no build step. The package *is* the folder.
    to the theme. *Use Default Theme* switches back.
 
 To iterate without reinstalling, put (or symlink) the package in
-`<project>/.openidea/plugins/<name>/` of an open project. It loads as a *dev*
+`<project>/.idea/openidea/plugins/<name>/` of an open project. It loads as a *dev*
 plugin, and *Reload* (or the *Reload Plugins* action) picks up your edits.
 
 To share a theme, publish the folder (a Git repository or a zip). Users

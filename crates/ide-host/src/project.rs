@@ -77,6 +77,12 @@ impl Host {
         let sink: SharedSink = (self.sink_for)(window);
         // Before anything the project starts: its children get the project's environment.
         let post_start = self.environment.project_opened(&root, &sink);
+        // before the settings load: they may still be in the old .openidea folder
+        match crate::idea_migration::migrate(&root) {
+            Ok(true) => tracing::info!("moved {} into .idea", root.join(ide_core::project_dir::DIR).display()),
+            Ok(false) => {}
+            Err(e) => tracing::warn!("could not move .openidea into .idea, will retry next time: {}", e.message),
+        }
         let settings = SettingsStore::load(&self.config_dir, Some(&root));
         let detected_roots = Arc::new(RwLock::new(ide_workspace::roots::detect(&root)));
         let excludes = exclude_globs(&settings.effective(), &detected_roots.read());

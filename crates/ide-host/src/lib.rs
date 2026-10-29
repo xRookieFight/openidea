@@ -4,6 +4,7 @@
 //! runs one on a remote machine and serves it over JSON-RPC ([`rpc`]).
 
 pub mod environment;
+pub mod idea_migration;
 pub mod ops;
 mod project;
 mod proxy;
