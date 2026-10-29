@@ -200,7 +200,7 @@ impl Default for GeneralSettings {
             confirm_exit: false,
             open_project_in: "ask".into(),
             default_project_directory: String::new(),
-            save_on_idle: false,
+            save_on_idle: true,
             idle_seconds: 15,
             date_format: DateFormatSettings::default(),
             power_save_mode: false,

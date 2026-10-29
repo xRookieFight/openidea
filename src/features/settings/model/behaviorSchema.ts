@@ -88,7 +88,7 @@ export const DEFAULT_APPEARANCE_EXTRAS: AppearanceExtras = {
 export const DEFAULT_GENERAL_EXTRAS: GeneralExtras = {
   openProjectIn: "ask",
   defaultProjectDirectory: "",
-  saveOnIdle: false,
+  saveOnIdle: true,
   idleSeconds: 15,
   dateFormat: { overrideSystem: false, pattern: "dd.MM.yyyy", use24Hour: true, pretty: true },
 };
