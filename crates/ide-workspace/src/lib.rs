@@ -8,6 +8,7 @@ pub mod file_defaults;
 pub mod file_moves;
 pub mod file_refs;
 pub mod history;
+mod idea_settings;
 pub mod memory;
 pub mod process;
 pub mod recent;

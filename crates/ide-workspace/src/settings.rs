@@ -1,3 +1,4 @@
+use crate::idea_settings;
 use ide_core::settings::Settings;
 use ide_core::{IdeError, IdeResult, project_dir};
 use parking_lot::RwLock;
@@ -6,8 +7,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, Item, Table, TableLike};
 
-/// Layered settings: defaults → `<app-config>/settings.toml` → `<project>/.idea/openidea/settings.toml`.
-/// Writes go through `toml_edit` so user comments survive.
+/// Layered settings: defaults → `<app-config>/settings.toml` → `<project>/.idea/openidea/settings.toml`
+/// → the project settings IntelliJ keeps in its own `.idea` files (see `crate::idea_settings`).
+/// TOML writes go through `toml_edit` so user comments survive.
 ///
 /// TOML keys use the camelCase names of the serde [`Settings`] struct, e.g.
 /// `[editor]` / `fontSize = 14`. A layer that fails to parse or holds values of
@@ -17,6 +19,7 @@ const PROJECT_FILE: &str = "settings.toml";
 pub struct SettingsStore {
     global_file: PathBuf,
     project_file: Option<PathBuf>,
+    project_root: Option<PathBuf>,
     effective: RwLock<Settings>,
 }
 
@@ -156,6 +159,7 @@ impl SettingsStore {
         let store = Self {
             global_file: config_dir.join("settings.toml"),
             project_file: project_root.map(|r| project_dir::path(r, PROJECT_FILE)),
+            project_root: project_root.map(Path::to_path_buf),
             effective: RwLock::new(Settings::default()),
         };
         store.reload();
@@ -185,6 +189,11 @@ impl SettingsStore {
                 tracing::warn!("{} has invalid settings, ignoring it: {e}", file.display());
             }
         }
+        if let Some(root) = &self.project_root
+            && let Err(e) = try_merge(&mut merged, idea_settings::read(root))
+        {
+            tracing::warn!("the settings in {}/.idea are invalid, ignoring them: {e}", root.display());
+        }
         serde_json::from_value(merged).unwrap_or_default()
     }
 
@@ -197,6 +206,47 @@ impl SettingsStore {
     /// `null` removes the key from that layer. Unknown keys and values of the
     /// wrong type are rejected with `InvalidInput`; the file is left untouched.
     pub fn set(&self, scope: SettingsScope, key: &str, value: serde_json::Value) -> IdeResult<Settings> {
+        if scope == SettingsScope::Project
+            && idea_settings::owns(key)
+            && let Some(root) = self.project_root.clone()
+        {
+            return self.set_in_idea(&root, key, value);
+        }
+        self.set_toml(scope, key, value)
+    }
+
+    /// A key IntelliJ keeps in `.idea`: validated against the whole stack, then
+    /// written to its IntelliJ file. The sidecar TOML only keeps a copy of the
+    /// values IntelliJ stores by name (see `idea_settings::also_in_sidecar`).
+    fn set_in_idea(&self, root: &Path, key: &str, value: Json) -> IdeResult<Settings> {
+        let keep = idea_settings::also_in_sidecar(key);
+        let mut layer = idea_settings::read(root);
+        idea_settings::put(&mut layer, key, value.clone());
+        let mut merged = defaults_json();
+        for (_, file) in self.layers() {
+            if let Some(l) = read_layer(&file) {
+                let _ = try_merge(&mut merged, l);
+            }
+        }
+        try_merge(&mut merged, layer.clone())
+            .map_err(|e| IdeError::invalid(format!("invalid value for {key}: {e}")))?;
+
+        let defaults = defaults_json();
+        let mut sidecar =
+            self.file(SettingsScope::Project).and_then(read_layer).unwrap_or(Json::Object(Default::default()));
+        let had_copy = idea_settings::get(&sidecar, key).is_some();
+        idea_settings::put(&mut sidecar, key, if keep { value.clone() } else { Json::Null });
+        let mut project = defaults.clone();
+        deep_merge(&mut project, sidecar);
+        deep_merge(&mut project, layer);
+        idea_settings::write(root, key, &project, &defaults)?;
+        if keep || had_copy {
+            return self.set_toml(SettingsScope::Project, key, if keep { value } else { Json::Null });
+        }
+        Ok(self.reload())
+    }
+
+    fn set_toml(&self, scope: SettingsScope, key: &str, value: serde_json::Value) -> IdeResult<Settings> {
         let file = self.file(scope).ok_or_else(|| IdeError::invalid("no project is open"))?.to_path_buf();
         let segments: Vec<&str> = key.split('.').collect();
         if segments.iter().any(|s| s.is_empty()) {
@@ -314,10 +364,10 @@ mod tests {
         let cfg = tmp.path().join("cfg");
         let proj = tmp.path().join("proj");
         std::fs::create_dir_all(&cfg).unwrap();
-        std::fs::create_dir_all(proj.join(".openidea")).unwrap();
+        std::fs::create_dir_all(proj.join(".idea/openidea")).unwrap();
         std::fs::write(cfg.join("settings.toml"), "keymap = \"vscode\"\n[editor]\nfontSize = 15\ntabSize = 2\n")
             .unwrap();
-        std::fs::write(proj.join(".openidea/settings.toml"), "[editor]\ntabSize = 8\n").unwrap();
+        std::fs::write(proj.join(".idea/openidea/settings.toml"), "[editor]\ntabSize = 8\n").unwrap();
 
         let s = SettingsStore::load(&cfg, Some(&proj)).effective();
         assert_eq!(s.keymap, "vscode");
@@ -326,7 +376,7 @@ mod tests {
         assert_eq!(s.editor.font_family, "JetBrains Mono");
 
         // Invalid project layer: ignored, global still applies.
-        std::fs::write(proj.join(".openidea/settings.toml"), "[editor]\ntabSize = \"wide\"\n").unwrap();
+        std::fs::write(proj.join(".idea/openidea/settings.toml"), "[editor]\ntabSize = \"wide\"\n").unwrap();
         let store = SettingsStore::load(&cfg, Some(&proj));
         assert_eq!(store.effective().editor.tab_size, 2);
         // Broken TOML in the global layer: defaults.
@@ -424,7 +474,10 @@ mod tests {
         // Project layer is created on demand and wins.
         let s = store.set(SettingsScope::Project, "editor.fontSize", json!(12)).unwrap();
         assert_eq!(s.editor.font_size, 12.0);
-        assert_eq!(std::fs::read_to_string(proj.join(".openidea/settings.toml")).unwrap(), "[editor]\nfontSize = 12\n");
+        assert_eq!(
+            std::fs::read_to_string(proj.join(".idea/openidea/settings.toml")).unwrap(),
+            "[editor]\nfontSize = 12\n"
+        );
         let s = store.set(SettingsScope::Project, "editor.fontSize", json!(null)).unwrap();
         assert_eq!(s.editor.font_size, 16.0);
 

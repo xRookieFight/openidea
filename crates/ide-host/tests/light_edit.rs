@@ -75,5 +75,5 @@ async fn light_windows_ignore_project_scoped_settings() {
     )
     .unwrap();
     assert!(!applied.project_scope);
-    assert!(!dir.join(".openidea").exists(), "no project settings next to the file");
+    assert!(!dir.join(".idea").exists(), "no project settings next to the file");
 }
