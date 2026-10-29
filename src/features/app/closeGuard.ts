@@ -9,7 +9,7 @@
  */
 import { commands, isTauri, onIdeEvent, type Settings } from "@/platform/ipc";
 import { t } from "@/platform/i18n";
-import { closeProject, provideLeaveProjectGuard, useProject } from "@/platform/project";
+import { provideLeaveProjectGuard, useProject } from "@/platform/project";
 import { maybeEditorService, notifications } from "@/workbench/contributions";
 import { ask, type Ask } from "@/workbench/messages";
 
@@ -99,12 +99,7 @@ async function onCloseRequested(deps: CloseDeps): Promise<boolean> {
   try {
     const ctx = await commands.windowCloseContext();
     const s = useProject.getState();
-    // Closing the last project (or LightEdit) window closes its project and shows the welcome
-    // screen (to open another one); closing the welcome screen, or quitting, closes the window.
-    if (!ctx.quitting && ctx.windows <= 1 && (s.project || s.lightEdit)) {
-      if (await confirmLeave(deps)) await closeProject();
-      return false;
-    }
+    // yeah, even the last project window just closes, no detour through the welcome screen
     const ok = await decideClose(
       {
         quitting: ctx.quitting,
