@@ -56,32 +56,6 @@ pub fn save(file: &Path, state: &ChangelistState) -> IdeResult<()> {
     Ok(())
 }
 
-/// Adds `entries` (e.g. `/shelf/`) to `<dir>/.gitignore` unless already listed, so
-/// per-user state in the project folder stays out of version control (IDEA writes
-/// `.idea/.gitignore` the same way).
-pub fn ensure_ignored(dir: &Path, entries: &[&str]) -> IdeResult<()> {
-    let file = dir.join(".gitignore");
-    let current = std::fs::read_to_string(&file).unwrap_or_default();
-    let missing: Vec<&str> = entries.iter().copied().filter(|e| !current.lines().any(|l| l.trim() == *e)).collect();
-    if missing.is_empty() {
-        return Ok(());
-    }
-    std::fs::create_dir_all(dir)?;
-    let mut text = current;
-    if !text.is_empty() && !text.ends_with('\n') {
-        text.push('\n');
-    }
-    if text.is_empty() {
-        text.push_str("# Per-user IDE state\n");
-    }
-    for e in missing {
-        text.push_str(e);
-        text.push('\n');
-    }
-    std::fs::write(file, text)?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,15 +79,5 @@ mod tests {
 
         std::fs::write(&file, r#"{"lists":[],"active":"x","files":{}}"#).unwrap();
         assert_eq!(load(&file).active, DEFAULT_ID);
-    }
-
-    #[test]
-    fn gitignore_entries_are_added_once() {
-        let tmp = tempfile::tempdir().unwrap();
-        ensure_ignored(tmp.path(), &["/shelf/"]).unwrap();
-        ensure_ignored(tmp.path(), &["/shelf/", "/changelists.json"]).unwrap();
-        let text = std::fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
-        assert_eq!(text.matches("/shelf/").count(), 1);
-        assert!(text.contains("/changelists.json\n"));
     }
 }

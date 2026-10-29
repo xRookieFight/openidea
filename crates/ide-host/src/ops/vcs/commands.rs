@@ -151,15 +151,13 @@ pub enum PatchSource {
 
 // ---- shelf (`.openidea/shelf`) and change lists (`.openidea/changelists.json`) ----
 
-const PRIVATE_ENTRIES: [&str; 2] = ["/shelf/", "/changelists.json"];
-
 fn shelf_dir(root: &Path) -> PathBuf {
     ide_core::project_dir::path(root, "shelf")
 }
 
 fn keep_private(root: &Path) {
-    if let Err(e) = ide_vcs::changelists::ensure_ignored(&ide_core::project_dir::path(root, ""), &PRIVATE_ENTRIES) {
-        tracing::warn!("could not update .openidea/.gitignore: {e}");
+    if let Err(e) = ide_core::project_dir::ensure_gitignore(root) {
+        tracing::warn!("could not update .idea/.gitignore: {e}");
     }
 }
 
