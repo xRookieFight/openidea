@@ -149,7 +149,7 @@ pub enum PatchSource {
     Commits { commits: Vec<String>, reverse: bool },
 }
 
-// ---- shelf (`.openidea/shelf`) and change lists (`.openidea/changelists.json`) ----
+// ---- shelf (`.idea/shelf`) and change lists (`.idea/workspace.xml`) ----
 
 fn shelf_dir(root: &Path) -> PathBuf {
     ide_core::project_dir::path(root, "shelf")
@@ -787,13 +787,13 @@ pub fn vcs_shelf_patch(host: &Host, window: &str, id: String) -> IdeResult<Strin
 
 pub fn vcs_changelists_load(host: &Host, window: &str) -> IdeResult<ChangelistState> {
     let project = host.project(window)?;
-    Ok(ide_vcs::changelists::load(&ide_core::project_dir::path(&project.root, "changelists.json")))
+    Ok(ide_vcs::changelists::load(&project.root))
 }
 
 pub fn vcs_changelists_save(host: &Host, window: &str, changelists: ChangelistState) -> IdeResult<()> {
     let project = host.project(window)?;
     keep_private(&project.root);
-    ide_vcs::changelists::save(&ide_core::project_dir::path(&project.root, "changelists.json"), &changelists)
+    ide_vcs::changelists::save(&project.root, &changelists)
 }
 
 /// Create Patch › Save to file.
