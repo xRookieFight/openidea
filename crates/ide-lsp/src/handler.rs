@@ -213,8 +213,9 @@ impl ClientHandler {
 }
 
 impl Handler for ClientHandler {
-    fn on_notification(&self, method: &str, params: Value) {
+    fn on_notification(&self, method: &str, mut params: Value) {
         let Some(mgr) = self.mgr.upgrade() else { return };
+        crate::uri::escape_file_uris(&mut params);
         match method {
             "$/progress" => self.progress(&mgr, params),
             "textDocument/publishDiagnostics" => self.publish_diagnostics(&mgr, params),
@@ -244,10 +245,11 @@ impl Handler for ClientHandler {
         }
     }
 
-    fn on_request(&self, method: &str, params: Value) -> Result<Value, (i64, String)> {
+    fn on_request(&self, method: &str, mut params: Value) -> Result<Value, (i64, String)> {
         let Some(mgr) = self.mgr.upgrade() else {
             return Err((codes::INTERNAL_ERROR, "client is shutting down".into()));
         };
+        crate::uri::escape_file_uris(&mut params);
         match method {
             "window/workDoneProgress/create" => Ok(Value::Null),
             "window/showMessageRequest" => {

@@ -852,11 +852,14 @@ impl LspManager {
         cancel: Option<&CancellationToken>,
         timeout: Duration,
     ) -> IdeResult<R> {
-        let fut = t.run.peer.request::<P, R>(method, params, cancel.cloned());
-        match tokio::time::timeout(timeout, fut).await {
-            Ok(r) => r.map_err(|e| rpc_err(&t.server.name, method, e)),
-            Err(_) => Err(rpc_err(&t.server.name, method, RpcError::Timeout)),
-        }
+        let fut = t.run.peer.request::<P, Value>(method, params, cancel.cloned());
+        let mut value = match tokio::time::timeout(timeout, fut).await {
+            Ok(r) => r.map_err(|e| rpc_err(&t.server.name, method, e))?,
+            Err(_) => return Err(rpc_err(&t.server.name, method, RpcError::Timeout)),
+        };
+        uri::escape_file_uris(&mut value);
+        serde_json::from_value(value)
+            .map_err(|e| rpc_err(&t.server.name, method, RpcError::Protocol(format!("{method}: {e}"))))
     }
 
     // ---- features ----
