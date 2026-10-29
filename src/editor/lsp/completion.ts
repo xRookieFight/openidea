@@ -31,6 +31,7 @@ import {
   isTauri,
   nextRequestId,
   type CompletionItem,
+  type CompletionList,
   type Markup,
   type RequestId,
 } from "@/platform/ipc";
@@ -56,6 +57,8 @@ import { editorPrefs } from "@/platform/editorSettings";
 import { tx } from "@/platform/i18n";
 import { showHint } from "./hint";
 import { inplaceRenameActive } from "./inplaceRename";
+import { indexCompletionLanguage, indexTypeOptions } from "./indexCompletion";
+import type { EditorDocContext } from "@/editor/api";
 
 interface RequestContext {
   doc: number;
@@ -413,6 +416,115 @@ interface RichCompletion extends Completion {
 /** Documents the server could not complete in, so typing doesn't ask again until a server is ready. */
 const completionBackoff = featureBackoff();
 
+/** How long the server gets before the lookup opens with index suggestions instead. */
+const INDEX_HEAD_START_MS = 40;
+
+/** A server answer that landed while index suggestions were showing, for the source to pick up. */
+let ready: { doc: number; text: Text; pos: number; list: CompletionList } | null = null;
+const lookups = new WeakMap<EditorView, IndexLookup>();
+
+function requestCompletion(doc: number, text: Text, pos: number, trigger: string | null) {
+  cancelInflight();
+  const id = nextRequestId();
+  inflight = id;
+  const request = lspRequest(
+    () => commands.lspCompletion(id, doc, offsetToPos(text, pos), trigger),
+    () => inflight === id,
+  );
+  void request.then(
+    () => {
+      if (inflight === id) inflight = null;
+    },
+    () => {
+      if (inflight === id) inflight = null;
+    },
+  );
+  return { id, request };
+}
+
+/**
+ * Index suggestions standing in for a slow server. CodeMirror keeps calling
+ * `update` while the user types; each new word asks the server (and the index)
+ * again in the background, and once the server has answered for exactly what's
+ * on screen, `update` steps aside so the normal source shows the real list.
+ */
+class IndexLookup {
+  private wantedFor: string;
+
+  constructor(
+    private view: EditorView,
+    private doc: EditorDocContext,
+    private from: number,
+    private options: Completion[],
+    text: string,
+    first: { request: Promise<CompletionList> },
+    state: { doc: Text; pos: number },
+  ) {
+    this.wantedFor = text;
+    this.track(first.request, text, state.doc, state.pos);
+  }
+
+  result(): CompletionResult {
+    return {
+      from: this.from,
+      options: this.options,
+      filter: true,
+      update: (_c, from, to, ctx) => this.update(from, to, ctx),
+    };
+  }
+
+  private update(from: number, to: number, ctx: CompletionContext): CompletionResult | null {
+    if (from !== this.from || lookups.get(this.view) !== this) return null;
+    const text = ctx.state.sliceDoc(from, to);
+    if (!text || !VALID_FOR.test(text)) return null;
+    if (ready && ready.doc === this.doc.doc && ready.text === ctx.state.doc && ready.pos === to) return null;
+    if (text !== this.wantedFor) {
+      this.wantedFor = text;
+      const { request } = requestCompletion(this.doc.doc, ctx.state.doc, to, null);
+      this.track(request, text, ctx.state.doc, to);
+      void indexTypeOptions(text, this.doc.language).then((options) => {
+        if (this.wantedFor !== text || !options.length) return;
+        this.options = options;
+        this.refresh();
+      });
+    }
+    return this.result();
+  }
+
+  private track(request: Promise<CompletionList>, text: string, docText: Text, pos: number) {
+    request.then(
+      (list) => {
+        if (this.wantedFor !== text || !list.items.length) return;
+        ready = { doc: this.doc.doc, text: docText, pos, list };
+        this.refresh();
+      },
+      () => {},
+    );
+  }
+
+  private refresh() {
+    // ok so CodeMirror only looks at a result again on typing; an empty typing transaction is that nudge
+    if (!this.view.dom.isConnected || lookups.get(this.view) !== this) return;
+    if (completionStatus(this.view.state) === "active") this.view.dispatch({ userEvent: "input.type.refresh" });
+  }
+}
+
+/** Index suggestions when the server hasn't answered within the head start, else null. */
+async function indexHeadStart(
+  ctx: CompletionContext,
+  request: Promise<CompletionList>,
+  word: string,
+  language: string,
+): Promise<Completion[] | null> {
+  const indexed = indexTypeOptions(word, language);
+  const late = new Promise<"late">((r) => setTimeout(() => r("late"), INDEX_HEAD_START_MS));
+  const answered = () => "answered" as const;
+  const first = await Promise.race([request.then(answered, answered), late]);
+  if (first !== "late" || ctx.aborted) return null;
+  const options = await indexed;
+  return options.length && !ctx.aborted ? options : null;
+}
+
 async function lspCompletionSource(ctx: CompletionContext): Promise<CompletionResult | null> {
   const doc = ctx.state.facet(lspDoc);
   if (!doc || doc.readOnly) return null;
@@ -421,32 +533,50 @@ async function lspCompletionSource(ctx: CompletionContext): Promise<CompletionRe
   if (!ctx.explicit && !word && !trigger) return null;
   if (!ctx.explicit && word && !trigger && /^\d/.test(word.text)) return null;
   if (completionBackoff.active(doc.doc)) return fallback(ctx);
-  cancelInflight();
-  const id = nextRequestId();
-  inflight = id;
-  // hmm, CodeMirror lets a running query finish while you keep typing, so a slow
-  // answer for "I" would hold back the one for "Init". Drop it on every keystroke.
-  ctx.addEventListener(
-    "abort",
-    () => {
-      if (inflight === id) cancelInflight();
-    },
-    { onDocChange: true },
-  );
-  let list;
-  try {
-    list = await lspRequest(
-      () => commands.lspCompletion(id, doc.doc, offsetToPos(ctx.state.doc, ctx.pos), trigger),
-      () => inflight === id,
+  let list: CompletionList;
+  if (ready && ready.doc === doc.doc && ready.text === ctx.state.doc && ready.pos === ctx.pos) {
+    list = ready.list;
+    ready = null;
+  } else {
+    if (ctx.view) lookups.delete(ctx.view);
+    const { id, request } = requestCompletion(doc.doc, ctx.state.doc, ctx.pos, trigger);
+    // hmm, CodeMirror lets a running query finish while you keep typing, so a slow
+    // answer for "I" would hold back the one for "Init". Drop it on every keystroke.
+    ctx.addEventListener(
+      "abort",
+      () => {
+        if (inflight === id) cancelInflight();
+      },
+      { onDocChange: true },
     );
-  } catch (e) {
-    if (isUnavailable(e)) {
-      completionBackoff.mark(doc.doc);
-      return fallback(ctx);
+    if (ctx.view && word && !trigger && !ctx.explicit && indexCompletionLanguage(doc.language)) {
+      const options = await indexHeadStart(ctx, request, word.text, doc.language);
+      if (options) {
+        const lookup = new IndexLookup(
+          ctx.view,
+          doc,
+          word.from,
+          options,
+          word.text,
+          { request },
+          {
+            doc: ctx.state.doc,
+            pos: ctx.pos,
+          },
+        );
+        lookups.set(ctx.view, lookup);
+        return lookup.result();
+      }
     }
-    return null;
-  } finally {
-    if (inflight === id) inflight = null;
+    try {
+      list = await request;
+    } catch (e) {
+      if (isUnavailable(e)) {
+        completionBackoff.mark(doc.doc);
+        return fallback(ctx);
+      }
+      return null;
+    }
   }
   if (ctx.aborted || !list.items.length) return list.items.length ? null : fallback(ctx);
   const req: RequestContext = { doc: doc.doc, path: doc.path, language: doc.uiMode, pos: ctx.pos, text: ctx.state.doc };
