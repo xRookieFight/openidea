@@ -1,6 +1,6 @@
-//! Data sources: per-project connection settings in `.openidea/data-sources.toml`.
-//! Passwords never go there: saved ones live in [`crate::secrets`], the others
-//! only in memory for the session.
+//! Data sources: per-project connection settings, stored in IntelliJ's
+//! `.idea/dataSources.xml` (see `crate::idea_sources`). Passwords never go there:
+//! saved ones live in [`crate::secrets`], the others only in memory for the session.
 
 use ide_core::{IdeError, IdeResult, IpcPath, project_dir};
 use serde::{Deserialize, Serialize};
@@ -382,14 +382,7 @@ struct SourcesFile {
 }
 
 pub fn load(root: &Path) -> IdeResult<Vec<DataSource>> {
-    let path = project_dir::path(root, FILE);
-    let text = match std::fs::read_to_string(&path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(e.into()),
-    };
-    let file: SourcesFile = toml::from_str(&text).map_err(|e| IdeError::invalid(format!("{}: {e}", path.display())))?;
-    Ok(file.sources)
+    crate::idea_sources::load(root)
 }
 
 pub fn save(root: &Path, sources: &[DataSource]) -> IdeResult<()> {
@@ -398,14 +391,19 @@ pub fn save(root: &Path, sources: &[DataSource]) -> IdeResult<()> {
             return Err(IdeError::invalid("every data source needs an id and a name"));
         }
     }
-    let path = project_dir::path(root, FILE);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let text = toml::to_string_pretty(&SourcesFile { sources: sources.to_vec() })
-        .map_err(|e| IdeError::internal(e.to_string()))?;
-    std::fs::write(path, text)?;
-    Ok(())
+    crate::idea_sources::save(root, sources)
+}
+
+/// Data sources from an old `.openidea/data-sources.toml` (migration only).
+pub fn legacy_load(root: &Path) -> IdeResult<Vec<DataSource>> {
+    let path = project_dir::legacy_path(root, FILE);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+    let file: SourcesFile = toml::from_str(&text).map_err(|e| IdeError::invalid(format!("{}: {e}", path.display())))?;
+    Ok(file.sources)
 }
 
 /// Credential store access. Blocking (may show an OS prompt): call off the async runtime.
@@ -429,14 +427,16 @@ mod tests {
             ..Default::default()
         };
         save(tmp.path(), std::slice::from_ref(&s)).unwrap();
-        let text = std::fs::read_to_string(tmp.path().join(".openidea/data-sources.toml")).unwrap();
-        assert!(!text.contains("password ="), "{text}");
+        for file in [".idea/dataSources.xml", ".idea/dataSources.local.xml", ".idea/openidea/data-sources.toml"] {
+            let text = std::fs::read_to_string(tmp.path().join(file)).unwrap_or_default();
+            assert!(!text.to_lowercase().contains("password\""), "{file}: {text}");
+        }
         assert_eq!(load(tmp.path()).unwrap(), vec![s]);
         assert!(save(tmp.path(), &[DataSource::default()]).is_err());
     }
 
     #[test]
-    fn reads_configs_written_before_the_new_settings() {
+    fn legacy_toml_still_reads() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join(".openidea");
         std::fs::create_dir_all(&dir).unwrap();
@@ -445,7 +445,7 @@ mod tests {
             "[[data-source]]\nid = \"a\"\nname = \"old\"\ndriver = \"postgres\"\nhost = \"db\"\nssl = \"require\"\n",
         )
         .unwrap();
-        let s = load(tmp.path()).unwrap().remove(0);
+        let s = legacy_load(tmp.path()).unwrap().remove(0);
         assert_eq!(s.ssl, DbSslMode::Require);
         assert!(s.introspection.all_databases && s.introspection.all_schemas);
         assert_eq!((s.color, s.url_only, s.options.transaction), (None, false, DbTxMode::Auto));

@@ -4,6 +4,7 @@
 
 pub mod conn;
 pub mod history;
+mod idea_sources;
 pub mod plan;
 pub mod secrets;
 pub mod source;
