@@ -75,7 +75,7 @@ describe("DocumentManager + slots", () => {
     expect(backend.docs.get(model.doc)?.text).toBe("0abcdef");
   });
 
-  it("trims modified lines and adds the final newline on save", async () => {
+  it("trims modified lines and leaves the missing final newline alone on save", async () => {
     const { backend, manager, frame } = setup({ "/p/a.txt": "keep   \nline" });
     const model = await manager.acquire("/p/a.txt");
     const slot = new EditorSlot(model, "t1", host);
@@ -83,7 +83,7 @@ describe("DocumentManager + slots", () => {
     const save = model.save("explicit");
     await frame();
     await save;
-    expect(backend.files.get("/p/a.txt")).toBe("keep   \nline x\n");
+    expect(backend.files.get("/p/a.txt")).toBe("keep   \nline x");
     expect(useDocMeta.getState()["/p/a.txt"]?.dirty).toBe(false);
   });
 

@@ -584,7 +584,7 @@ export class DocModel {
         const ec = prefsOf(this.settings()).codeStyle.editorconfig ? this.editorconfig : null;
         const changes = saveCleanupChanges(state, this.modified, {
           trim: ec?.trimTrailingWhitespace ?? files?.trimTrailingWhitespace ?? true,
-          finalNewline: ec?.insertFinalNewline ?? files?.ensureFinalNewline ?? true,
+          finalNewline: ec?.insertFinalNewline ?? files?.ensureFinalNewline ?? false,
           protectLines: g.keepTrailingOnCaretLine ? protectLines : new Set(),
           allLines: g.stripTrailingScope === "all",
           trailingBlankLines: g.removeTrailingBlankLines,

@@ -468,7 +468,7 @@ impl Default for FileSettings {
             exclude: vec!["**/.git".into(), "**/node_modules".into(), "**/target".into()],
             ignored_names: crate::ignored::DEFAULT_IGNORED_NAMES.iter().map(|s| (*s).into()).collect(),
             trim_trailing_whitespace: true,
-            ensure_final_newline: true,
+            ensure_final_newline: false,
             local_history_days: 5,
             local_history_max_mb: 512,
             file_types: BTreeMap::new(),

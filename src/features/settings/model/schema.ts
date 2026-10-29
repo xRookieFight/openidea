@@ -137,7 +137,7 @@ export const DEFAULT_SETTINGS: ValidSettings = {
     exclude: ["**/.git", "**/node_modules", "**/target"],
     ignoredNames: [...DEFAULT_IGNORED_NAMES],
     trimTrailingWhitespace: true,
-    ensureFinalNewline: true,
+    ensureFinalNewline: false,
     localHistoryDays: 5,
     localHistoryMaxMb: 512,
     fileTypes: {},
