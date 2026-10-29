@@ -1,11 +1,12 @@
 //! Run configurations and process management.
 
-mod config;
 mod detect;
 pub mod envfile;
 pub mod gradle_jvm;
+mod idea;
 pub mod java_cmdline;
 pub mod junit;
+mod legacy;
 mod process;
 pub mod python_path;
 mod utf8;
@@ -32,7 +33,7 @@ pub struct RunConfig {
     pub args: Vec<String>,
     pub cwd: Option<ide_core::IpcPath>,
     pub env: BTreeMap<String, String>,
-    /// Detected configs are regenerated; user configs persist in `.openidea/run.toml`.
+    /// Detected configs are regenerated; user configs persist in `.idea` (see `idea`).
     pub detected: bool,
     /// Test runner configs render results in the test tree.
     pub is_test: bool,
@@ -77,7 +78,7 @@ pub struct RunExtras {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[specta(optional)]
     pub folder: Option<String>,
-    /// Stored in the workspace (`.openidea/run.local.toml`, not shared) instead of `run.toml`.
+    /// Stored in the workspace (`.idea/workspace.xml`, not shared) instead of `.idea/runConfigurations`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[specta(optional)]
     pub local: bool,
@@ -189,24 +190,34 @@ pub fn detect(root: &Path) -> Vec<RunConfig> {
     detect::detect(root)
 }
 
-/// Reads `<root>/.openidea/run.toml`; a missing file yields no configs.
+/// The project's run configurations from `.idea` (shared ones first); none when there are none.
 pub fn load_user_configs(root: &Path) -> IdeResult<Vec<RunConfig>> {
-    config::load(root)
+    idea::load(root)
 }
 
-/// Writes `<root>/.openidea/run.toml` (and the workspace-local `run.local.toml` for
-/// configurations not stored as project files), preserving unrelated content.
+/// Writes the configurations into `.idea`, keeping IntelliJ configurations of
+/// types OpenIDEA doesn't know.
 pub fn save_user_configs(root: &Path, configs: &[RunConfig]) -> IdeResult<()> {
-    config::save(root, configs)
+    idea::save(root, configs)
 }
 
-/// Configuration templates (per-type defaults for new configurations) from `run.toml`.
+/// Configuration templates (per-type defaults for new configurations) from `workspace.xml`.
 pub fn load_templates(root: &Path) -> IdeResult<Vec<RunConfig>> {
-    config::load_templates(root)
+    idea::load_templates(root)
 }
 
 pub fn save_templates(root: &Path, templates: &[RunConfig]) -> IdeResult<()> {
-    config::save_templates(root, templates)
+    idea::save_templates(root, templates)
+}
+
+/// Configurations from an old `.openidea/run.toml` and `run.local.toml` (migration only).
+pub fn legacy_user_configs(root: &Path) -> IdeResult<Vec<RunConfig>> {
+    legacy::load(root)
+}
+
+/// Templates from an old `.openidea/run.toml` (migration only).
+pub fn legacy_templates(root: &Path) -> IdeResult<Vec<RunConfig>> {
+    legacy::load_templates(root)
 }
 
 /// The environment runs inherit (unless "Include system environment variables" is off).
@@ -214,7 +225,7 @@ pub fn system_env() -> BTreeMap<String, String> {
     ide_core::process::host_vars().filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?))).collect()
 }
 
-/// Path of the user run configuration file for `root`.
+/// Where shared run configurations of `root` live.
 pub fn user_configs_path(root: &Path) -> PathBuf {
-    config::config_path(root)
+    ide_core::project_dir::idea_path(root, "runConfigurations")
 }

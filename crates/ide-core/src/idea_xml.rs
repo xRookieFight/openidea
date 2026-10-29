@@ -105,12 +105,14 @@ impl Element {
         self.children = vec![Node::Text(v.into())];
     }
 
-    fn option_element(&self, name: &str) -> Option<&Element> {
+    /// The `<option name="…">` element itself, for options holding nested elements.
+    pub fn option_node(&self, name: &str) -> Option<&Element> {
         self.elements().find(|e| e.name == "option" && e.attr("name") == Some(name))
     }
 
-    fn option_element_mut(&mut self, name: &str) -> &mut Element {
-        if self.option_element(name).is_none() {
+    /// Like [`Element::option_node`], inserting an empty option when missing.
+    pub fn option_node_mut(&mut self, name: &str) -> &mut Element {
+        if self.option_node(name).is_none() {
             self.push(Element::new("option").with_attr("name", name));
         }
         self.elements_mut().find(|e| e.name == "option" && e.attr("name") == Some(name)).expect("just inserted")
@@ -118,14 +120,14 @@ impl Element {
 
     /// `value` of `<option name="…" value="…" />`.
     pub fn option(&self, name: &str) -> Option<&str> {
-        self.option_element(name)?.attr("value")
+        self.option_node(name)?.attr("value")
     }
 
     /// Sets `<option name="…" value="…" />`; `None` removes it.
     pub fn set_option(&mut self, name: &str, value: Option<&str>) {
         match value {
             Some(v) => {
-                let o = self.option_element_mut(name);
+                let o = self.option_node_mut(name);
                 o.set_attr("value", v);
             }
             None => self.retain_elements(|e| !(e.name == "option" && e.attr("name") == Some(name))),
@@ -134,7 +136,7 @@ impl Element {
 
     /// Values of `<option name="…"><list><option value="…" /></list></option>`.
     pub fn option_list(&self, name: &str) -> Vec<String> {
-        self.option_element(name)
+        self.option_node(name)
             .and_then(|o| o.child("list"))
             .map(|l| l.elements().filter_map(|e| e.attr("value")).map(str::to_owned).collect())
             .unwrap_or_default()
@@ -145,14 +147,21 @@ impl Element {
         for v in values {
             list.push(Element::new("option").with_attr("value", v.as_str()));
         }
-        let o = self.option_element_mut(name);
+        let o = self.option_node_mut(name);
         o.remove_attr("value");
         o.children = vec![Node::Element(list)];
     }
 
-    /// The whole file: XML declaration plus this element, the way IntelliJ writes it.
+    /// The whole file: XML declaration plus this element, the way IntelliJ writes
+    /// `misc.xml`, `workspace.xml` and friends.
     pub fn to_idea_string(&self) -> String {
-        let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{}", self.to_xml())
+    }
+
+    /// Just the element, no declaration: IntelliJ writes files whose root is a
+    /// `<component>` (run configurations, code styles, inspection profiles) like this.
+    pub fn to_xml(&self) -> String {
+        let mut out = String::new();
         self.write(&mut out, 0);
         out
     }

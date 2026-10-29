@@ -38,7 +38,7 @@ import { RunWidget } from "./RunWidget";
 import { runConfigsRunAnything } from "./runAnything";
 import { runServiceProvider } from "./services";
 import { runBeforeLaunch } from "./beforeLaunch";
-import { compoundChildren } from "./configs";
+import { compoundChildren, CONFIG_FILES } from "./configs";
 import { remoteDebugBlocked } from "./remote";
 import { isDebugOnly, registerBuiltinTypes } from "./types";
 import { runGutter } from "./runGutter";
@@ -234,9 +234,6 @@ function rerunActive() {
 function useRunningCount(): number | null {
   return useRun((s) => s.sessions.filter((x) => x.status === "running" || x.status === "starting").length || null);
 }
-
-const CONFIG_FILES =
-  /(?:^|\/)(?:\.openidea\/run\.toml|package\.json|deno\.jsonc?|Cargo\.toml|build\.gradle(?:\.kts)?|pom\.xml|go\.mod|pyproject\.toml|setup\.cfg|pytest\.ini|manage\.py|Makefile|justfile)$/;
 
 let reloadTimer: ReturnType<typeof setTimeout> | undefined;
 function scheduleReload() {
@@ -500,7 +497,7 @@ export function activate(): () => void {
   disposers.push(() => setBeforeLaunchRunner(null));
   if (hasProject()) void loadConfigs();
 
-  // Reload when run.toml or build files change on disk (cheap; detection is fast).
+  // Reload when IntelliJ's run configuration files or build files change on disk (cheap; detection is fast).
   disposers.push(
     onIdeEvent("fsChanged", (e) => {
       const paths = [...e.created, ...e.modified, ...e.removed];

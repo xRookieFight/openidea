@@ -1,4 +1,5 @@
-//! User-defined run configurations persisted in `<root>/.openidea/run.toml`:
+//! Run configurations as older OpenIDEA versions saved them, in `<root>/.openidea/run.toml`.
+//! Only the migration to `.idea` reads these now:
 //!
 //! ```toml
 //! [[configurations]]
@@ -27,8 +28,8 @@
 //! env = { NODE_ENV = "development" }
 //! ```
 //!
-//! Configurations not stored as project files live in the same format in the
-//! workspace-local, git-ignored `run.local.toml`.
+//! Configurations not stored as project files were in the same format in the
+//! workspace-local `run.local.toml`.
 
 use crate::{BeforeLaunchTask, RunConfig, RunExtras};
 use ide_core::{IdeError, IdeResult, project_dir};
@@ -36,21 +37,15 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, value};
 
 const FILE: &str = "run.toml";
 const LOCAL_FILE: &str = "run.local.toml";
-const CONFIGURATIONS: &str = "configurations";
-const TEMPLATES: &str = "templates";
-
-/// Where run configurations are written.
-pub(crate) fn config_path(root: &Path) -> PathBuf {
-    project_dir::path(root, FILE)
+fn config_path(root: &Path) -> PathBuf {
+    project_dir::legacy_path(root, FILE)
 }
 
-/// Workspace-local configurations ("Store as project file" off).
-pub(crate) fn local_path(root: &Path) -> PathBuf {
-    project_dir::path(root, LOCAL_FILE)
+fn local_path(root: &Path) -> PathBuf {
+    project_dir::legacy_path(root, LOCAL_FILE)
 }
 
 #[derive(Deserialize)]
@@ -114,7 +109,7 @@ struct FileConfig {
     target: Option<String>,
 }
 
-fn slug(s: &str) -> String {
+pub(crate) fn slug(s: &str) -> String {
     let mut out = String::new();
     for c in s.chars() {
         if c.is_alphanumeric() {
@@ -193,165 +188,4 @@ pub(crate) fn load(root: &Path) -> IdeResult<Vec<RunConfig>> {
 
 pub(crate) fn load_templates(root: &Path) -> IdeResult<Vec<RunConfig>> {
     Ok(read_doc(&config_path(root))?.map(|d| convert(d.templates, false)).unwrap_or_default())
-}
-
-fn to_table(c: &RunConfig) -> Table {
-    let mut t = Table::new();
-    t.insert("id", value(&c.id));
-    t.insert("name", value(&c.name));
-    t.insert("kind", value(&c.kind));
-    t.insert("command", value(&c.command));
-    if !c.args.is_empty() {
-        t.insert("args", value(c.args.iter().collect::<Array>()));
-    }
-    if let Some(cwd) = &c.cwd {
-        t.insert("cwd", value(cwd.to_string_lossy().replace('\\', "/")));
-    }
-    if !c.env.is_empty() {
-        let mut env = InlineTable::new();
-        for (k, v) in &c.env {
-            env.insert(k, v.into());
-        }
-        t.insert("env", value(env));
-    }
-    if c.is_test {
-        t.insert("is-test", value(true));
-    }
-    if let Some(adapter) = &c.debug_adapter {
-        t.insert("debug-adapter", value(adapter));
-    }
-    if c.allow_parallel {
-        t.insert("allow-parallel", value(true));
-    }
-    let x = &c.extras;
-    if let Some(folder) = &x.folder {
-        t.insert("folder", value(folder));
-    }
-    if !x.params.is_empty() {
-        let mut params = InlineTable::new();
-        for (k, v) in &x.params {
-            params.insert(k, v.into());
-        }
-        t.insert("params", value(params));
-    }
-    if !x.include_system_env {
-        t.insert("include-system-env", value(false));
-    }
-    if !x.env_files.is_empty() {
-        t.insert("env-files", value(x.env_files.iter().collect::<Array>()));
-    }
-    if let Some(f) = &x.stdin_file {
-        t.insert("stdin-file", value(f));
-    }
-    if let Some(f) = &x.output_file {
-        t.insert("output-file", value(f));
-    }
-    if !x.before_launch.is_empty() {
-        let mut tasks = Array::new();
-        for task in &x.before_launch {
-            let mut it = InlineTable::new();
-            it.insert("kind", task.kind.as_str().into());
-            if !task.target.is_empty() {
-                it.insert("target", task.target.as_str().into());
-            }
-            tasks.push(it);
-        }
-        t.insert("before-launch", value(tasks));
-    }
-    if !x.compound.is_empty() {
-        t.insert("compound", value(x.compound.iter().collect::<Array>()));
-    }
-    for (key, on) in [
-        ("show-on-stdout", x.show_on_stdout),
-        ("show-on-stderr", x.show_on_stderr),
-        ("focus-tool-window", x.focus_tool_window),
-        ("emulate-terminal", x.emulate_terminal),
-    ] {
-        if on {
-            t.insert(key, value(true));
-        }
-    }
-    if let Some(open) = x.open_tool_window {
-        t.insert("open-tool-window", value(open));
-    }
-    if let Some(stop) = &x.stop_command {
-        t.insert("stop-command", value(stop));
-    }
-    if let Some(target) = &x.target {
-        t.insert("target", value(target));
-    }
-    t
-}
-
-/// Replaces the `key` array of tables in the file at `path`, keeping unrelated keys and comments.
-fn write_array(path: &Path, key: &str, configs: &[&RunConfig]) -> IdeResult<()> {
-    let existing = match fs::read_to_string(path) {
-        Ok(t) => Some(t),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(e.into()),
-    };
-    if existing.is_none() && configs.is_empty() {
-        return Ok(());
-    }
-    // A file we cannot parse is replaced.
-    let mut doc = existing.as_deref().and_then(|t| t.parse::<DocumentMut>().ok()).unwrap_or_default();
-    if configs.is_empty() {
-        doc.remove(key);
-    } else {
-        let mut array = ArrayOfTables::new();
-        for c in configs {
-            array.push(to_table(c));
-        }
-        doc.insert(key, Item::ArrayOfTables(array));
-    }
-    let text = doc.to_string();
-    if existing.as_deref() == Some(text.as_str()) {
-        return Ok(());
-    }
-
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir)?;
-    }
-    let tmp = path.with_extension("toml.tmp");
-    fs::write(&tmp, text)?;
-    fs::rename(&tmp, path).inspect_err(|_| {
-        let _ = fs::remove_file(&tmp);
-    })?;
-    Ok(())
-}
-
-/// Keeps the workspace-local file out of version control (`.openidea/.gitignore`).
-fn ignore_local(root: &Path) -> IdeResult<()> {
-    let entry = format!("/{LOCAL_FILE}");
-    let file = project_dir::path(root, ".gitignore");
-    let current = fs::read_to_string(&file).unwrap_or_default();
-    if current.lines().any(|l| l.trim() == entry) {
-        return Ok(());
-    }
-    let mut text = current;
-    if text.is_empty() {
-        text.push_str("# Per-user IDE state\n");
-    } else if !text.ends_with('\n') {
-        text.push('\n');
-    }
-    text.push_str(&entry);
-    text.push('\n');
-    if let Some(dir) = file.parent() {
-        fs::create_dir_all(dir)?;
-    }
-    fs::write(file, text)?;
-    Ok(())
-}
-
-pub(crate) fn save(root: &Path, configs: &[RunConfig]) -> IdeResult<()> {
-    let (local, shared): (Vec<&RunConfig>, Vec<&RunConfig>) = configs.iter().partition(|c| c.extras.local);
-    write_array(&config_path(root), CONFIGURATIONS, &shared)?;
-    if !local.is_empty() {
-        ignore_local(root)?;
-    }
-    write_array(&local_path(root), CONFIGURATIONS, &local)
-}
-
-pub(crate) fn save_templates(root: &Path, templates: &[RunConfig]) -> IdeResult<()> {
-    write_array(&config_path(root), TEMPLATES, &templates.iter().collect::<Vec<_>>())
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RunConfig } from "@/platform/ipc";
 import {
+  CONFIG_FILES,
   commandLine,
   duplicateConfig,
   formatArgs,
@@ -232,5 +233,21 @@ describe("context configuration", () => {
     expect(contextConfig("tools/gen.py", venv)).toMatchObject({ command: ".venv/bin/python", args: ["tools/gen.py"] });
     const uv = [cfg({ id: "pytest", kind: "pytest", command: "uv", args: ["run", "pytest"], isTest: true })];
     expect(contextConfig("tools/gen.py", uv)).toMatchObject({ command: "uv", args: ["run", "python", "tools/gen.py"] });
+  });
+});
+
+describe("config file watcher", () => {
+  it("reloads on IntelliJ run configuration files and build files", () => {
+    for (const p of [
+      "/p/.idea/workspace.xml",
+      "/p/.idea/runConfigurations/Dev_server.xml",
+      "/p/.run/Main.run.xml",
+      "/p/package.json",
+    ]) {
+      expect(CONFIG_FILES.test(p), p).toBe(true);
+    }
+    for (const p of ["/p/.openidea/run.toml", "/p/.idea/misc.xml", "/p/.idea/runConfigurations/x/y.xml"]) {
+      expect(CONFIG_FILES.test(p), p).toBe(false);
+    }
   });
 });

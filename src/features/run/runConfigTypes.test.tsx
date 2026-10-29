@@ -26,6 +26,7 @@ import {
   newConfigOfType,
   registerBuiltinTypes,
   typeFor,
+  withDerivedCommand,
   withParams,
 } from "./types";
 
@@ -68,6 +69,21 @@ afterEach(() => disposeTypes());
 describe("configuration types", () => {
   it("are contributed through the registry", () => {
     expect(runConfigTypes().map((t) => t.id)).toEqual(expect.arrayContaining(BUILTIN_TYPES.map((t) => t.id)));
+  });
+
+  it("configurations IntelliJ wrote get their command line from the params", () => {
+    const fromIdea = cfg("user:build", {
+      kind: "gradle",
+      command: "",
+      params: { projectDir: "app", tasks: "clean build" },
+    });
+    expect(withDerivedCommand(fromIdea)).toMatchObject({ args: ["clean", "build"], cwd: "app" });
+    expect(withDerivedCommand(fromIdea).command).toMatch(/gradle/);
+    // nothing to derive from: left as it is
+    const old = cfg("user:old", { command: "cargo", args: ["run"] });
+    expect(withDerivedCommand(old)).toBe(old);
+    const unknown = cfg("user:x", { kind: "nope", params: { a: "b" } });
+    expect(withDerivedCommand(unknown)).toBe(unknown);
   });
 
   it("old run.toml entries edit as a Shell Script command line", () => {

@@ -36,7 +36,7 @@ import { failedTestPaths, leafTestPaths, rerunFailedConfig, testsConfig } from "
 import { compoundChildren } from "./configs";
 import { remoteLabel, startWithRemedies } from "./remote";
 import { TerminalOutput } from "./terminalOutput";
-import { typeFor } from "./types";
+import { typeFor, withDerivedCommand } from "./types";
 import { startedPort } from "./serverPort";
 import { tx } from "@/platform/i18n";
 
@@ -164,7 +164,7 @@ export async function loadConfigs(): Promise<void> {
     return;
   }
   try {
-    const saved = await call(commands.runConfigs());
+    const saved = (await call(commands.runConfigs())).map((c) => withDerivedCommand(c));
     if (useProject.getState().project?.root !== root) return;
     // Temporary configs survive reloads (and restarts) until saved or evicted; a saved one wins.
     const temps = readTemporary(root).filter((t) => !saved.some((c) => c.id === t.id));

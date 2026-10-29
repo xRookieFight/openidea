@@ -363,6 +363,17 @@ export function withParams(config: RunConfig, params: Record<string, string>, ty
   };
 }
 
+/**
+ * A loaded configuration with its command line worked out from its params.
+ * IntelliJ's files only hold the type's own options, so a configuration made
+ * there arrives without one; `config` comes back as is when there's nothing to derive.
+ */
+export function withDerivedCommand(config: RunConfig, type = typeFor(config.kind)): RunConfig {
+  const params = config.params;
+  if (config.detected || !type || !params || Object.keys(params).length === 0) return config;
+  return withParams(config, params, type);
+}
+
 /** Whether "Emulate terminal in output console" applies to `config`. */
 export function terminalApplies(config: RunConfig, type = typeFor(config.kind)): boolean {
   return config.kind !== COMPOUND && !config.isTest && type?.terminal !== false && !type?.debugOnly;
