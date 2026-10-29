@@ -5,7 +5,8 @@
  * runtime application of keymap / UI font size / high-contrast settings.
  *
  * On the desktop Settings open in a native child window (`activateSettingsWindow`
- * runs there); in the browser build they open as an in-page dialog.
+ * runs there), booted hidden after start-up and kept alive between opens; in
+ * the browser build they open as an in-page dialog.
  *
  * `executeAction("file.settings", "keymap")` opens a specific page;
  * `file.newProjectsSettings` (IDEA's Settings for New Projects) edits the
@@ -16,7 +17,7 @@ import { registerActions, type Action } from "@/platform/actions";
 import { call, commands, isTauri } from "@/platform/ipc";
 import { isPopupOpen, lazyComponent } from "@/ui";
 import { loadSettings, useProject } from "@/platform/project";
-import { restoreRemote } from "@/platform/remote";
+import { disableRemote, restoreRemote } from "@/platform/remote";
 import { provideSettingsSearchIndex, registerOverlay } from "@/workbench/contributions";
 import { windowBackgroundHex } from "@/workbench/theme";
 import { LazySettingsDialog, loadBuiltinPages, unloadBuiltinPages } from "./dialog/LazySettingsDialog";
@@ -98,6 +99,16 @@ async function showSettings(page?: string, newProjects = false) {
   openSettings(page, { newProjects });
 }
 
+/**
+ * Boots the Settings window hidden a bit after start-up: it's a whole second
+ * webview, and booting it on ⌘, would keep Settings blank for a while.
+ */
+function prewarmSettingsWindow(): () => void {
+  // hmm, 3 s keeps it out of the way of the project's own start-up (index, language servers)
+  const timer = setTimeout(() => void commands.windowPrewarmSettings(windowBackgroundHex()).catch(() => {}), 3000);
+  return () => clearTimeout(timer);
+}
+
 export function activate(): () => void {
   const disposers = [
     trackRuntimeSettings(),
@@ -122,6 +133,7 @@ export function activate(): () => void {
     ]),
     provideSettingsSearchIndex(settingsSearchEntries),
     isTauri() ? installSettingsHost() : () => {},
+    isTauri() ? prewarmSettingsWindow() : () => {},
   ];
   return () => disposers.reverse().forEach((d) => d());
 }
@@ -149,16 +161,16 @@ function relaunch(launch: SettingsLaunch | null) {
   navigate(launch.page);
 }
 
-function listenLaunch(): () => void {
+function listenLaunch(onLaunch: () => void): () => void {
   let disposed = false;
   let off: (() => void) | undefined;
   void getCurrentWebviewWindow()
-    .listen(LAUNCH_EVENT, () => void takeLaunch().then(relaunch))
+    .listen(LAUNCH_EVENT, onLaunch)
     .then((u) => {
       if (disposed) return u();
       off = u;
       // A page requested before we listened: its event is gone, the launch is not.
-      void takeLaunch().then(relaunch);
+      onLaunch();
     });
   return () => {
     disposed = true;
@@ -182,20 +194,67 @@ function installWindowKeys(): () => void {
   return () => window.removeEventListener("keydown", onKey);
 }
 
+/** The OS close button (and Rust closing it on a project switch) cancels; the window only hides. */
+function hideOnClose(): () => void {
+  let disposed = false;
+  let off: (() => void) | undefined;
+  const win = getCurrentWebviewWindow();
+  void win
+    .onCloseRequested((e) => {
+      e.preventDefault();
+      if (useSettingsDialog.getState().open) closeSettings();
+      else void win.hide().catch(() => {});
+    })
+    .then((u) => {
+      if (disposed) return u();
+      off = u;
+    });
+  return () => {
+    disposed = true;
+    off?.();
+  };
+}
+
+/**
+ * The parent's project and remote session. Read again on every reopen: the
+ * hidden window outlives the parent switching projects.
+ */
+async function loadContext() {
+  disableRemote();
+  await restoreRemote();
+  const project = await commands.projectCurrent().catch(() => null);
+  if (project) useProject.setState({ project, settings: project.settings });
+  else {
+    useProject.setState({ project: null });
+    await loadSettings().catch((e) => console.warn("cannot load settings", e));
+  }
+}
+
 /**
  * The settings window (`settings-<parent>`): settings pages only, working on
- * the parent's project; Cancel / OK / Esc close the window.
+ * the parent's project. It boots hidden ahead of time and stays alive: Cancel /
+ * OK / Esc hide it, and the next launch reopens the dialog.
  */
 export function activateSettingsWindow(parent: string): () => void {
+  const pages = loadBuiltinPages();
+  const launch = async () => {
+    await pages;
+    const next = await takeLaunch();
+    if (!next) return;
+    if (useSettingsDialog.getState().open) return relaunch(next);
+    await loadContext();
+    openSettings(next.page, { newProjects: next.newProjects });
+  };
   const disposers = [
     trackRuntimeSettings(),
     unloadBuiltinPages,
     registerActions(settingsActions((page, newProjects) => relaunch({ page, newProjects: !!newProjects }))),
     installActionProxies(parent),
-    listenLaunch(),
+    listenLaunch(() => void launch()),
     installWindowKeys(),
+    hideOnClose(),
     useSettingsDialog.subscribe((s, prev) => {
-      if (prev.open && !s.open) void getCurrentWebviewWindow().close();
+      if (prev.open && !s.open) void getCurrentWebviewWindow().hide().catch(() => {});
       if (s.newProjects !== prev.newProjects) {
         void getCurrentWebviewWindow()
           .setTitle(settingsTitle(s.newProjects))
@@ -203,15 +262,7 @@ export function activateSettingsWindow(parent: string): () => void {
       }
     }),
   ];
-  void (async () => {
-    await loadBuiltinPages();
-    await restoreRemote();
-    const project = await commands.projectCurrent().catch(() => null);
-    if (project) useProject.setState({ project, settings: project.settings });
-    else await loadSettings().catch((e) => console.warn("cannot load settings", e));
-    // `listenLaunch` may have taken the launch first and applied it already.
-    const launch = await takeLaunch();
-    openSettings(launch?.page, { newProjects: launch?.newProjects ?? useSettingsDialog.getState().newProjects });
-  })();
+  // ok so a prewarmed window has no launch and stays closed; `listenLaunch` may also get here first
+  void launch();
   return () => disposers.reverse().forEach((d) => d());
 }

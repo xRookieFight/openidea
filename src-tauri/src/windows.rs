@@ -8,7 +8,9 @@
 //!
 //! Settings open in a separate window `settings-<parent>` (one per project
 //! window) that shares its parent's project (see [`AppState::project`]); its
-//! [`Launch::settings_page`] tells it which page to show.
+//! [`Launch::settings_page`] tells it which page to show. It is usually built
+//! hidden ahead of time and only hides when closed, so a launch is also what
+//! reopens it.
 
 use crate::state::AppState;
 use crate::theme_frame::builtin_frame;
@@ -678,17 +680,36 @@ pub fn open_settings_window(
     let parent_label = settings_parent(parent.label()).unwrap_or(parent.label()).to_owned();
     let label = settings_label(&parent_label);
     let windows = app.state::<WindowsState>();
+    // ok so a hidden one (prewarmed, or closed earlier) has its dialog closed, and the launch is what reopens it
+    windows.set_launch(&label, Launch { settings_page: page, new_projects, ..Default::default() });
     if let Some(existing) = app.get_webview_window(&label) {
-        if page.is_some() || new_projects {
-            windows.set_launch(&label, Launch { settings_page: page, new_projects, ..Default::default() });
-            let _ = app.emit_to(label.as_str(), LAUNCH_EVENT, ());
+        let _ = app.emit_to(label.as_str(), LAUNCH_EVENT, ());
+        if !existing.is_visible().unwrap_or(true)
+            && let Some(parent) = app.get_webview_window(&parent_label)
+        {
+            center_over(&parent, &existing);
         }
         focus(&existing);
         return Ok(());
     }
-    let parent = app.get_webview_window(&parent_label).ok_or_else(|| IdeError::not_found("no parent window"))?;
+    let window = create_settings_window(app, &parent_label, background)?;
+    focus(&window);
+    Ok(())
+}
+
+/// Creates `parent`'s settings window hidden, so the first ⌘, doesn't wait for a
+/// whole new webview to boot. No-op when it already exists.
+pub fn prewarm_settings_window(app: &AppHandle, parent: &WebviewWindow, background: Option<String>) -> IdeResult<()> {
+    if is_settings_window(parent.label()) || app.get_webview_window(&settings_label(parent.label())).is_some() {
+        return Ok(());
+    }
+    create_settings_window(app, parent.label(), background).map(drop)
+}
+
+fn create_settings_window(app: &AppHandle, parent_label: &str, background: Option<String>) -> IdeResult<WebviewWindow> {
+    let parent = app.get_webview_window(parent_label).ok_or_else(|| IdeError::not_found("no parent window"))?;
     let mut config = window_config(app)?;
-    config.label = label.clone();
+    config.label = settings_label(parent_label);
     config.title = "Settings".into();
     // Frameless on Windows and Linux like project windows (tauri.<os>.conf.json): the page draws
     // the title bar in the app theme instead of a system caption that follows the OS theme.
@@ -703,7 +724,6 @@ pub fn open_settings_window(
     if let Some(color) = background.as_deref().and_then(hex_color) {
         config.background_color = Some(color);
     }
-    windows.set_launch(&label, Launch { settings_page: page, new_projects, ..Default::default() });
     let builder = WebviewWindowBuilder::from_config(app, &config);
     // AppKit child windows can disappear when dragged to another display's Space.
     // The settings label already tracks ownership and parent-close cleanup.
@@ -713,7 +733,12 @@ pub fn open_settings_window(
         .and_then(|b| b.build())
         .map_err(|e| IdeError::internal(format!("cannot create settings window: {e}")))?;
     apply_zoom(app, &window);
-    // window-state restores the remembered size; the position always follows the parent.
+    center_over(&parent, &window);
+    Ok(window)
+}
+
+/// window-state restores the remembered size; the position always follows the parent.
+fn center_over(parent: &WebviewWindow, window: &WebviewWindow) {
     if let (Ok(pos), Ok(size), Ok(own), Ok(scale)) =
         (parent.outer_position(), parent.outer_size(), window.outer_size(), parent.scale_factor())
     {
@@ -722,8 +747,6 @@ pub fn open_settings_window(
         let at = centered(pos.x, pos.y, size.width, size.height, own.width, own.height);
         let _ = window.set_position(tauri::LogicalPosition::new(at.0, at.1));
     }
-    focus(&window);
-    Ok(())
 }
 
 /// Top-left corner that centres a `w`×`h` window over the parent rectangle

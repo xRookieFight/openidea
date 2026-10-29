@@ -74,6 +74,13 @@ pub async fn window_open_settings(
     windows::open_settings_window(&app, &window, page, new_projects, background)
 }
 
+/// Builds this window's Settings window in the background (hidden) so opening it later is instant.
+#[tauri::command]
+#[specta::specta]
+pub fn window_prewarm_settings(app: AppHandle, window: WebviewWindow, background: Option<String>) -> IdeResult<()> {
+    windows::prewarm_settings_window(&app, &window, background)
+}
+
 /// Focuses the next / previous window (⌘` / ⇧⌘`).
 #[tauri::command]
 #[specta::specta]

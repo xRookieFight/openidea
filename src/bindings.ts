@@ -644,6 +644,8 @@ export const commands = {
 	 *  `background` (`#rrggbb`) paints a new window until its page has loaded.
 	 */
 	windowOpenSettings: (page: string | null, newProjects: boolean, background: string | null) => typedError<null, IdeError>(__TAURI_INVOKE("window_open_settings", { page, newProjects, background })),
+	/**  Builds this window's Settings window in the background (hidden) so opening it later is instant. */
+	windowPrewarmSettings: (background: string | null) => typedError<null, IdeError>(__TAURI_INVOKE("window_prewarm_settings", { background })),
 	/**  Focuses the next / previous window (⌘` / ⇧⌘`). */
 	windowCycle: (forward: boolean) => __TAURI_INVOKE<void>("window_cycle", { forward }),
 	windowToggleFullscreen: () => typedError<boolean, IdeError>(__TAURI_INVOKE("window_toggle_fullscreen")),
