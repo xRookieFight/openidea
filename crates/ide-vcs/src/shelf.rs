@@ -1,24 +1,27 @@
-//! The shelf: named patches of local changes kept outside git, like IDEA's
-//! `.idea/shelf`. Each shelved change list is `<shelf>/<id>/shelved.patch` plus
-//! `<shelf>/<id>/shelf.json` with its name, date and files.
+//! The shelf: named patches of local changes kept outside git, in IntelliJ's
+//! `.idea/shelf` layout. Each shelved change list `<id>` is a descriptor
+//! `<shelf>/<id>.xml` (name, date) plus its patch `<shelf>/<id>/shelved.patch`;
+//! the files are read back from the patch.
 
 use crate::cli::run;
 use crate::{ApplyOutcome, ChangeKind, Repo, ShelvedChangeList};
+use ide_core::idea_xml::{self, Element};
 use ide_core::{IdeError, IdeResult};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 const PATCH: &str = "shelved.patch";
-const INFO: &str = "shelf.json";
+const LEGACY_INFO: &str = "shelf.json";
+const BRANCH: &str = "openidea.branch";
 
-#[derive(Serialize, Deserialize)]
+/// What older OpenIDEA versions kept next to the patch.
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Info {
+struct LegacyInfo {
     name: String,
     time_ms: f64,
     #[serde(default)]
     branch: Option<String>,
-    files: Vec<crate::ChangedFile>,
 }
 
 fn now_ms() -> f64 {
@@ -49,11 +52,64 @@ fn entry_dir(shelf: &Path, id: &str) -> IdeResult<PathBuf> {
     Ok(dir)
 }
 
-fn read_info(dir: &Path) -> Option<Info> {
-    serde_json::from_slice(&std::fs::read(dir.join(INFO)).ok()?).ok()
+fn descriptor(shelf: &Path, id: &str) -> PathBuf {
+    shelf.join(format!("{id}.xml"))
 }
 
-/// Shelved change lists, newest first.
+/// The project root when `shelf` is `<root>/.idea/shelf`, for `$PROJECT_DIR$` paths.
+fn project_root(shelf: &Path) -> Option<&Path> {
+    let idea = shelf.parent()?;
+    (idea.file_name()? == ".idea").then(|| idea.parent()).flatten()
+}
+
+fn read_descriptor(shelf: &Path, id: &str) -> Option<Element> {
+    idea_xml::read_project_file(&descriptor(shelf, id)).ok().flatten()
+}
+
+fn write_descriptor(shelf: &Path, e: &Element) -> IdeResult<()> {
+    let id = e.attr("name").unwrap_or_default();
+    idea_xml::write_atomic(&descriptor(shelf, id), &e.to_xml())
+}
+
+fn files_of(patch: &str) -> Vec<crate::ChangedFile> {
+    crate::patch::parse_patch(patch)
+        .into_iter()
+        .map(|f| crate::ChangedFile { path: f.path, kind: f.kind, old_path: f.old_path })
+        .collect()
+}
+
+fn free_id(shelf: &Path, base: &str) -> String {
+    let mut id = base.to_owned();
+    let mut n = 1;
+    while shelf.join(&id).exists() || descriptor(shelf, &id).exists() {
+        n += 1;
+        id = format!("{base}_{n}");
+    }
+    id
+}
+
+/// Writes one entry: the patch, then its descriptor.
+fn write_entry(shelf: &Path, id: &str, name: &str, time_ms: f64, branch: Option<&str>, patch: &str) -> IdeResult<()> {
+    let dir = shelf.join(id);
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join(PATCH), patch.as_bytes())?;
+    let patch_path = dir.join(PATCH).to_string_lossy().into_owned();
+    let path = match project_root(shelf) {
+        Some(root) => idea_xml::collapse_path(root, &patch_path),
+        None => patch_path.replace('\\', "/"),
+    };
+    let mut e = Element::new("changelist")
+        .with_attr("name", id)
+        .with_attr("date", format!("{}", time_ms as i64))
+        .with_attr("recycled", "false")
+        .with_attr("toDelete", "false");
+    e.set_option("PATH", Some(&path));
+    e.set_option("DESCRIPTION", Some(name));
+    e.set_option(BRANCH, branch);
+    write_descriptor(shelf, &e)
+}
+
+/// Shelved change lists, newest first. IntelliJ's recycled ("recently deleted") ones are left out.
 pub fn list(shelf: &Path) -> IdeResult<Vec<ShelvedChangeList>> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(shelf) else { return Ok(out) };
@@ -63,25 +119,19 @@ pub fn list(shelf: &Path) -> IdeResult<Vec<ShelvedChangeList>> {
             continue;
         }
         let id = e.file_name().to_string_lossy().into_owned();
-        let info = read_info(&dir).unwrap_or_else(|| Info {
-            name: id.clone(),
-            time_ms: 0.0,
-            branch: None,
-            files: std::fs::read_to_string(dir.join(PATCH))
-                .map(|p| {
-                    crate::patch::parse_patch(&p)
-                        .into_iter()
-                        .map(|f| crate::ChangedFile { path: f.path, kind: f.kind, old_path: f.old_path })
-                        .collect()
-                })
-                .unwrap_or_default(),
-        });
+        let desc = read_descriptor(shelf, &id);
+        if let Some(d) = &desc
+            && (d.attr("recycled") == Some("true") || d.attr("toDelete") == Some("true"))
+        {
+            continue;
+        }
+        let name = desc.as_ref().and_then(|d| d.option("DESCRIPTION")).filter(|n| !n.is_empty()).unwrap_or(&id);
         out.push(ShelvedChangeList {
-            id,
-            name: info.name,
-            time_ms: info.time_ms,
-            branch: info.branch,
-            files: info.files,
+            id: id.clone(),
+            name: name.to_owned(),
+            time_ms: desc.as_ref().and_then(|d| d.attr("date")?.parse().ok()).unwrap_or(0.0),
+            branch: desc.as_ref().and_then(|d| d.option(BRANCH)).map(str::to_owned),
+            files: std::fs::read_to_string(dir.join(PATCH)).map(|p| files_of(&p)).unwrap_or_default(),
         });
     }
     out.sort_by(|a, b| b.time_ms.total_cmp(&a.time_ms).then_with(|| a.name.cmp(&b.name)));
@@ -95,7 +145,10 @@ pub fn patch_of(shelf: &Path, id: &str) -> IdeResult<String> {
 
 pub fn delete(shelf: &Path, id: &str) -> IdeResult<()> {
     std::fs::remove_dir_all(entry_dir(shelf, id)?)?;
-    Ok(())
+    match std::fs::remove_file(descriptor(shelf, id)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+        _ => Ok(()),
+    }
 }
 
 pub fn rename(shelf: &Path, id: &str, name: &str) -> IdeResult<()> {
@@ -103,12 +156,35 @@ pub fn rename(shelf: &Path, id: &str, name: &str) -> IdeResult<()> {
     if name.is_empty() {
         return Err(IdeError::invalid("name must not be empty"));
     }
-    let dir = entry_dir(shelf, id)?;
-    let mut info =
-        read_info(&dir).unwrap_or(Info { name: String::new(), time_ms: now_ms(), branch: None, files: vec![] });
-    info.name = name.to_string();
-    std::fs::write(dir.join(INFO), serde_json::to_vec_pretty(&info).map_err(|e| IdeError::internal(e.to_string()))?)?;
-    Ok(())
+    entry_dir(shelf, id)?;
+    match read_descriptor(shelf, id) {
+        Some(mut d) => {
+            d.set_option("DESCRIPTION", Some(name));
+            write_descriptor(shelf, &d)
+        }
+        None => write_entry(shelf, id, name, now_ms(), None, &patch_of(shelf, id)?),
+    }
+}
+
+/// Copies the entries of an old `.openidea/shelf` into `shelf`; returns how many.
+pub fn import_legacy(legacy: &Path, shelf: &Path) -> IdeResult<usize> {
+    let Ok(entries) = std::fs::read_dir(legacy) else { return Ok(0) };
+    let mut n = 0;
+    for e in entries.flatten() {
+        let dir = e.path();
+        let Ok(patch) = std::fs::read_to_string(dir.join(PATCH)) else { continue };
+        let old_id = e.file_name().to_string_lossy().into_owned();
+        let info: Option<LegacyInfo> =
+            std::fs::read(dir.join(LEGACY_INFO)).ok().and_then(|b| serde_json::from_slice(&b).ok());
+        let (name, time, branch) = match info {
+            Some(i) => (i.name, i.time_ms, i.branch),
+            None => (old_id.clone(), now_ms(), None),
+        };
+        let id = free_id(shelf, &old_id);
+        write_entry(shelf, &id, &name, time, branch.as_deref(), &patch)?;
+        n += 1;
+    }
+    Ok(n)
 }
 
 /// Saves the changes of `rel_paths` to the shelf and reverts them in the working tree.
@@ -122,30 +198,16 @@ pub(crate) fn shelve(r: &Repo, shelf: &Path, name: &str, rel_paths: &[String]) -
         return Err(IdeError::invalid("no changes to shelve"));
     }
     std::fs::create_dir_all(shelf)?;
-    let base = slug(name);
-    let mut id = base.clone();
-    let mut n = 1;
-    while shelf.join(&id).exists() {
-        n += 1;
-        id = format!("{base}_{n}");
-    }
-    let dir = shelf.join(&id);
-    std::fs::create_dir_all(&dir)?;
-    let info = Info { name: name.to_string(), time_ms: now_ms(), branch: r.branch_info()?.head, files: files.clone() };
-    let write = || -> IdeResult<()> {
-        std::fs::write(dir.join(PATCH), patch.as_bytes())?;
-        std::fs::write(
-            dir.join(INFO),
-            serde_json::to_vec_pretty(&info).map_err(|e| IdeError::internal(e.to_string()))?,
-        )?;
-        Ok(())
-    };
-    if let Err(e) = write() {
-        let _ = std::fs::remove_dir_all(&dir);
+    let id = free_id(shelf, &slug(name));
+    let time_ms = now_ms();
+    let branch = r.branch_info()?.head;
+    if let Err(e) = write_entry(shelf, &id, name, time_ms, branch.as_deref(), &patch) {
+        let _ = std::fs::remove_dir_all(shelf.join(&id));
+        let _ = std::fs::remove_file(descriptor(shelf, &id));
         return Err(e);
     }
     revert_files(r, &files)?;
-    Ok(ShelvedChangeList { id, name: info.name, time_ms: info.time_ms, branch: info.branch, files })
+    Ok(ShelvedChangeList { id, name: name.to_string(), time_ms, branch, files })
 }
 
 /// Restores `files` to HEAD in both index and working tree; files absent from HEAD are removed.
@@ -184,7 +246,10 @@ pub(crate) fn unshelve(r: &Repo, shelf: &Path, id: &str, remove: bool) -> IdeRes
 
 #[cfg(test)]
 mod tests {
-    use super::slug;
+    use super::*;
+
+    const PATCH_TEXT: &str =
+        "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-one\n+two\n";
 
     #[test]
     fn slugs() {
@@ -194,5 +259,70 @@ mod tests {
         );
         assert_eq!(slug("  ../  "), "shelf");
         assert_eq!(slug("Фикс"), "Фикс");
+    }
+
+    #[test]
+    fn lists_intellij_shelf() {
+        let tmp = tempfile::tempdir().unwrap();
+        let shelf = tmp.path().join(".idea/shelf");
+        for (id, recycled) in [("Fix_login", "false"), ("Old_stuff", "true")] {
+            std::fs::create_dir_all(shelf.join(id)).unwrap();
+            std::fs::write(shelf.join(id).join(PATCH), PATCH_TEXT).unwrap();
+            std::fs::write(
+                shelf.join(format!("{id}.xml")),
+                format!(
+                    "<changelist name=\"{id}\" date=\"1700000000000\" recycled=\"{recycled}\" toDelete=\"false\">\n  \
+                     <option name=\"PATH\" value=\"$PROJECT_DIR$/.idea/shelf/{id}/shelved.patch\" />\n  \
+                     <option name=\"DESCRIPTION\" value=\"Fix login\" />\n</changelist>"
+                ),
+            )
+            .unwrap();
+        }
+        let listed = list(&shelf).unwrap();
+        assert_eq!(listed.len(), 1, "recycled entries stay hidden");
+        assert_eq!(listed[0].id, "Fix_login");
+        assert_eq!(listed[0].name, "Fix login");
+        assert_eq!(listed[0].time_ms, 1_700_000_000_000.0);
+        assert_eq!(listed[0].files[0].path, "src/a.rs");
+    }
+
+    #[test]
+    fn entries_are_written_like_intellij() {
+        let tmp = tempfile::tempdir().unwrap();
+        let shelf = tmp.path().join(".idea/shelf");
+        write_entry(&shelf, "wip", "Work in progress", 1_700_000_000_000.0, Some("main"), PATCH_TEXT).unwrap();
+        let descriptor = std::fs::read_to_string(shelf.join("wip.xml")).unwrap();
+        assert_eq!(
+            descriptor,
+            "<changelist name=\"wip\" date=\"1700000000000\" recycled=\"false\" toDelete=\"false\">\n  \
+             <option name=\"PATH\" value=\"$PROJECT_DIR$/.idea/shelf/wip/shelved.patch\" />\n  \
+             <option name=\"DESCRIPTION\" value=\"Work in progress\" />\n  \
+             <option name=\"openidea.branch\" value=\"main\" />\n</changelist>"
+        );
+        rename(&shelf, "wip", "Renamed").unwrap();
+        let listed = list(&shelf).unwrap();
+        assert_eq!((listed[0].name.as_str(), listed[0].branch.as_deref()), ("Renamed", Some("main")));
+        delete(&shelf, "wip").unwrap();
+        assert!(!shelf.join("wip.xml").exists() && !shelf.join("wip").exists());
+    }
+
+    #[test]
+    fn import_legacy_converts_json_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let legacy = tmp.path().join(".openidea/shelf");
+        std::fs::create_dir_all(legacy.join("wip")).unwrap();
+        std::fs::write(legacy.join("wip").join(PATCH), PATCH_TEXT).unwrap();
+        std::fs::write(
+            legacy.join("wip").join("shelf.json"),
+            r#"{"name":"My work","timeMs":5.0,"branch":"dev","files":[]}"#,
+        )
+        .unwrap();
+        let shelf = tmp.path().join(".idea/shelf");
+        // an IntelliJ entry with the same id already there
+        write_entry(&shelf, "wip", "Theirs", 1.0, None, PATCH_TEXT).unwrap();
+        assert_eq!(import_legacy(&legacy, &shelf).unwrap(), 1);
+        let mut names: Vec<String> = list(&shelf).unwrap().into_iter().map(|e| e.name).collect();
+        names.sort();
+        assert_eq!(names, ["My work", "Theirs"]);
     }
 }

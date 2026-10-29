@@ -152,7 +152,7 @@ pub enum PatchSource {
 // ---- shelf (`.idea/shelf`) and change lists (`.idea/workspace.xml`) ----
 
 fn shelf_dir(root: &Path) -> PathBuf {
-    ide_core::project_dir::path(root, "shelf")
+    ide_core::project_dir::idea_path(root, "shelf")
 }
 
 fn keep_private(root: &Path) {

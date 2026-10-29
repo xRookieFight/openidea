@@ -1,5 +1,5 @@
 /**
- * Shelf: Shelve Changes… (named patch under `.openidea/shelf`, changes reverted),
+ * Shelf: Shelve Changes… (named patch under `.idea/shelf`, like IntelliJ, changes reverted),
  * the Shelf tab of the Commit tool window, Unshelve (3-way, conflicts go to the
  * merge UI), rename and delete.
  */
