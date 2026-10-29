@@ -424,9 +424,15 @@ async function lspCompletionSource(ctx: CompletionContext): Promise<CompletionRe
   cancelInflight();
   const id = nextRequestId();
   inflight = id;
-  ctx.addEventListener("abort", () => {
-    if (inflight === id) cancelInflight();
-  });
+  // hmm, CodeMirror lets a running query finish while you keep typing, so a slow
+  // answer for "I" would hold back the one for "Init". Drop it on every keystroke.
+  ctx.addEventListener(
+    "abort",
+    () => {
+      if (inflight === id) cancelInflight();
+    },
+    { onDocChange: true },
+  );
   let list;
   try {
     list = await lspRequest(
@@ -759,6 +765,8 @@ export function completionExtension() {
     prefetchResolve,
     autocompletion({
       override: [gated(lspCompletionSource), gated(contributedSource), gated(pathCompletionSource)],
+      // ok so the default 100 ms is pure wait on top of the server's answer, IDEA pops up right away
+      activateOnTypingDelay: 30,
       icons: false,
       addToOptions: [
         { render: kindBadge, position: 20 },
