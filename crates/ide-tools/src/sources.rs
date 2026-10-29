@@ -320,6 +320,20 @@ mod tests {
     }
 
     #[test]
+    fn kotlin_server_links_in_release_notes() {
+        let json = r#"{"tag_name":"kotlin-lsp/v263.7084.0","assets":[],"body":
+            "* [mac x64](https://download.jetbrains.com/language-server/kotlin-server/263.7084.0/kotlin-server-263.7084.0.sit)\n* [mac arm](https://download.jetbrains.com/language-server/kotlin-server/263.7084.0/kotlin-server-263.7084.0-aarch64.sit)\n* [linux arm](https://download.jetbrains.com/language-server/kotlin-server/263.7084.0/kotlin-server-263.7084.0-aarch64.tar.gz)\n* [linux x64](https://download.jetbrains.com/language-server/kotlin-server/263.7084.0/kotlin-server-263.7084.0.tar.gz)\n* [windows](https://download.jetbrains.com/language-server/kotlin-server/263.7084.0/kotlin-server-263.7084.0.win.zip)"}"#;
+        let rules = find("kotlin-lsp").unwrap().asset_rules();
+        // hmm, the arm link comes first on purpose: the x64 pattern has no arch in it
+        let d = github_pick(json, rules, LINUX).unwrap();
+        assert_eq!(d.name, "kotlin-server-263.7084.0.tar.gz");
+        let d = github_pick(json, rules, Platform { os: Os::Linux, arch: Arch::Arm64 }).unwrap();
+        assert_eq!(d.name, "kotlin-server-263.7084.0-aarch64.tar.gz");
+        let d = github_pick(json, rules, Platform { os: Os::Windows, arch: Arch::X64 }).unwrap();
+        assert_eq!(d.name, "kotlin-server-263.7084.0.win.zip");
+    }
+
+    #[test]
     fn hashicorp() {
         let json = r#"{"version":"0.36.4","url_shasums":"https://r/terraform-ls_0.36.4_SHA256SUMS","builds":[
             {"arch":"arm64","os":"darwin","url":"https://r/terraform-ls_0.36.4_darwin_arm64.zip"},

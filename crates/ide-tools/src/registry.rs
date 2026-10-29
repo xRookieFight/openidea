@@ -558,6 +558,10 @@ pub static TOOLS: &[ToolSpec] = &[
                 rule(Linux, X64, "kotlin-lsp-*-linux-x64.zip"),
                 rule(Linux, Arm64, "kotlin-lsp-*-linux-aarch64.zip"),
                 rule(Windows, X64, "kotlin-lsp-*-win-x64.zip"),
+                // ok so newer releases are kotlin-server-*, x64 has no arch suffix at all
+                rule(Linux, Arm64, "kotlin-server-*-aarch64.tar.gz"),
+                rule(Linux, X64, "kotlin-server-*.tar.gz"),
+                rule(Windows, X64, "kotlin-server-*.win.zip"),
                 // Older releases ship one platform-independent archive.
                 any_arch(Mac, "kotlin-*.zip"),
                 any_arch(Linux, "kotlin-*.zip"),

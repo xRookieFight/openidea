@@ -62,13 +62,17 @@ pub const fn any_arch(os: Os, pattern: &'static str) -> AssetRule {
 
 /// Picks the asset for `platform`: rules are tried in order and the first
 /// rule matching any asset name wins. Apple Silicon falls back to x64 assets
-/// (Rosetta) when no native build exists.
+/// (Rosetta) when no native build exists. An x64 rule never picks an arm
+/// build, so a pattern without an arch in it (`kotlin-server-*.tar.gz`) is safe.
 pub fn select_asset<'a>(names: &[&'a str], rules: &[AssetRule], platform: Platform) -> Option<&'a str> {
+    let is_arm = |n: &str| {
+        let n = n.to_ascii_lowercase();
+        n.contains("aarch64") || n.contains("arm64")
+    };
     let pick = |arch: Arch| {
-        rules
-            .iter()
-            .filter(|r| r.os == platform.os && r.arch.is_none_or(|a| a == arch))
-            .find_map(|r| names.iter().copied().find(|n| glob_match(r.pattern, n)))
+        rules.iter().filter(|r| r.os == platform.os && r.arch.is_none_or(|a| a == arch)).find_map(|r| {
+            names.iter().copied().find(|n| glob_match(r.pattern, n) && !(r.arch == Some(Arch::X64) && is_arm(n)))
+        })
     };
     pick(platform.arch)
         .or_else(|| (platform.os == Os::Mac && platform.arch == Arch::Arm64).then(|| pick(Arch::X64)).flatten())
