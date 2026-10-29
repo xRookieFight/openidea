@@ -16,13 +16,24 @@ const UNSET: &str = "unset";
 const PARAMS: &str = "params";
 const PARAMS_UNSET: &str = "paramsUnset";
 
-fn object(c: &RunConfig) -> Map<String, Json> {
-    match serde_json::to_value(c) {
-        Ok(Json::Object(mut m)) => {
-            // hmm, `cwd: None` serializes as null; treat it like an absent key
+/// TOML has no null, so unset options disappear at every depth (`cwd: None`
+/// would serialize as one).
+fn strip_nulls(v: &mut Json) {
+    match v {
+        Json::Object(m) => {
             m.retain(|_, v| !v.is_null());
-            m
+            m.values_mut().for_each(strip_nulls);
         }
+        Json::Array(a) => a.iter_mut().for_each(strip_nulls),
+        _ => {}
+    }
+}
+
+fn object(c: &RunConfig) -> Map<String, Json> {
+    let mut v = serde_json::to_value(c).unwrap_or(Json::Null);
+    strip_nulls(&mut v);
+    match v {
+        Json::Object(m) => m,
         _ => Map::new(),
     }
 }
