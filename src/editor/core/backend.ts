@@ -115,6 +115,8 @@ const EXT_LANG: Record<string, string> = {
   cpp: "cpp",
   h: "c",
   sh: "shellscript",
+  bat: "bat",
+  cmd: "bat",
   sql: "sql",
   xml: "xml",
 };
@@ -218,6 +220,15 @@ const MEM_LANGUAGES: LanguageInfo[] = [
     lineComment: "#",
     blockComment: null,
     indent: { tabSize: 2, insertSpaces: true },
+  },
+  {
+    id: "bat",
+    name: "Batch",
+    extensions: ["bat", "cmd"],
+    uiMode: "Batch",
+    lineComment: "@REM",
+    blockComment: null,
+    indent: { tabSize: 4, insertSpaces: true },
   },
   {
     id: "plaintext",
@@ -527,9 +538,4 @@ let current: DocBackend | null = null;
 /** The backend in use: IPC inside Tauri, in-memory in a plain browser. */
 export function docBackend(): DocBackend {
   return (current ??= isTauri() ? ipcBackend : createMemoryBackend());
-}
-
-/** Test hook. */
-export function _setDocBackend(b: DocBackend | null) {
-  current = b;
 }
